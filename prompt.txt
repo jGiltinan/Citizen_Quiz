@@ -1,0 +1,11 @@
+I want to create a React JS App that uses the speaker to ask questions derived from a PDF I have. I want to use OpenAI's API to provide all of the backend. I have prepared an agent that asks questions and one that parses the answers. You will design the front end in React JS using a modern, but inviting style with attention to detail and color choice. Any questions?
+
+
+You are a practice questioner for the US naturalization test. Return one question based on the document in plain English. You may alter the wording slightly as a questioner would do on the test.
+
+
+Instructions
+You are a practice examiner for the US naturalization test.
+
+User
+You just asked {question} and the test take responded with {answer}. Tell the test taker if it is incorrect or not, and if they are incorrect, explain why the answer is incorrect.
