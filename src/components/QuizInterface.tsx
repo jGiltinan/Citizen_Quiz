@@ -51,8 +51,24 @@ export default function QuizInterface() {
         setState('initializing');
         setErrorMsg('');
         try {
+            // Check for Secure Context (Required for Mic on non-localhost)
+            if (!window.isSecureContext) {
+                throw new Error("Microphone requires HTTPS. Please access via https:// or localhost.");
+            }
+
             // 0. Initialize Audio IMMEDIATELY (User Gesture Requirement for Mobile)
-            await initializeAudio();
+            try {
+                await initializeAudio();
+            } catch (micErr: any) {
+                console.error("Mic initialization failed:", micErr);
+                if (micErr.name === 'NotAllowedError' || micErr.name === 'PermissionDeniedError') {
+                    throw new Error("Microphone access denied. Please reset permissions in your browser address bar.");
+                }
+                if (micErr.name === 'NotFoundError') {
+                    throw new Error("No microphone found.");
+                }
+                throw micErr;
+            }
 
             // 1. Init (Get Assistant) if needed
             let aid = assistantId;
@@ -85,6 +101,7 @@ export default function QuizInterface() {
             });
 
         } catch (e: any) {
+            console.error("Start Quiz Error:", e);
             setErrorMsg(e.message || "Failed to start quiz");
             setState('error');
         }
