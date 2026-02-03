@@ -16,7 +16,7 @@ export default function QuizInterface() {
     const [assistantId, setAssistantId] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
-    const { isRecording, startRecording, stopRecording, audioBlob, stream } = useAudioRecorder();
+    const { isRecording, startRecording, stopRecording, audioBlob, stream, initializeAudio } = useAudioRecorder();
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     // Helper to play text as audio
@@ -51,6 +51,9 @@ export default function QuizInterface() {
         setState('initializing');
         setErrorMsg('');
         try {
+            // 0. Initialize Audio IMMEDIATELY (User Gesture Requirement for Mobile)
+            await initializeAudio();
+
             // 1. Init (Get Assistant) if needed
             let aid = assistantId;
             if (!aid) {
