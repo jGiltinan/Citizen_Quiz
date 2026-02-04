@@ -12,8 +12,7 @@ export default function QuizInterface() {
     const [state, setState] = useState<QuizState>('idle');
     const [currentQuestion, setCurrentQuestion] = useState<string>('');
     const [lastFeedback, setLastFeedback] = useState<string>('');
-    const [threadId, setThreadId] = useState<string | null>(null);
-    const [assistantId, setAssistantId] = useState<string | null>(null);
+    const [responseId, setResponseId] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
     const { isRecording, startRecording, stopRecording, audioBlob, stream, initializeAudio } = useAudioRecorder();
@@ -70,28 +69,15 @@ export default function QuizInterface() {
                 throw micErr;
             }
 
-            // 1. Init (Get Assistant) if needed
-            let aid = assistantId;
-            if (!aid) {
-                const initRes = await fetch('/api/assistant', {
-                    method: 'POST',
-                    body: JSON.stringify({ action: 'init' })
-                });
-                const initData = await initRes.json();
-                if (initData.error) throw new Error(initData.error);
-                aid = initData.assistantId;
-                setAssistantId(aid);
-            }
-
-            // 2. Start Thread & Get First Question
+            // 1. Start Response Chain (action: 'start')
             const res = await fetch('/api/assistant', {
                 method: 'POST',
-                body: JSON.stringify({ action: 'start', assistantId: aid })
+                body: JSON.stringify({ action: 'start' })
             });
             const data = await res.json();
             if (data.error) throw new Error(data.error);
 
-            setThreadId(data.threadId);
+            setResponseId(data.responseId);
             setCurrentQuestion(data.message);
 
             setState('speaking_question');
@@ -103,31 +89,6 @@ export default function QuizInterface() {
         } catch (e: any) {
             console.error("Start Quiz Error:", e);
             setErrorMsg(e.message || "Failed to start quiz");
-            setState('error');
-        }
-    };
-
-    const fetchQuestion = async (tid: string) => {
-        setState('processing');
-        try {
-            const res = await fetch('/api/assistant', {
-                method: 'POST',
-                body: JSON.stringify({ action: 'question', threadId: tid })
-            });
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
-
-            setCurrentQuestion(data.message);
-
-            setState('speaking_question');
-            await speakText(data.message, () => {
-                // Auto-start recording after question? 
-                // Or wait for user? Let's wait for user for better UX/Permission handling.
-                setState('idle'); // Actually, state should be 'awaiting_answer' but 'idle' with question visible works
-            });
-
-        } catch (e: any) {
-            setErrorMsg(e.message || "Failed to get question");
             setState('error');
         }
     };
@@ -151,12 +112,13 @@ export default function QuizInterface() {
             const userText = transData.text;
 
             // 2. Submit to Assistant (Returns Feedback AND Next Question)
+            if (!responseId) throw new Error("No active conversation found.");
+
             const res = await fetch('/api/assistant', {
                 method: 'POST',
                 body: JSON.stringify({
                     action: 'answer',
-                    threadId: threadId,
-                    assistantId: assistantId,
+                    previousResponseId: responseId,
                     answer: userText
                 })
             });
@@ -165,6 +127,7 @@ export default function QuizInterface() {
 
             setLastFeedback(data.feedback);
             setCurrentQuestion(data.nextQuestion);
+            setResponseId(data.responseId); // Update ID for next turn
 
             // 3. Speak Feedback
             setState('speaking_feedback');
@@ -271,7 +234,7 @@ export default function QuizInterface() {
 
             {/* Controls */}
             <div className="flex items-center gap-6">
-                {!threadId ? (
+                {!responseId ? (
                     <button
                         onClick={startQuiz}
                         disabled={state === 'initializing'}

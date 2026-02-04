@@ -15,120 +15,78 @@ You are a practice examiner for the US naturalization test.
 
 You just asked the user a question and the test taker responded. Tell the test taker if it is incorrect or not, and if they are incorrect, explain why the answer is incorrect.`;
 
-
-// Helper: Find or Create the Assistant
-async function getOrCreateAssistant() {
-    const assistants = await openai.beta.assistants.list({ limit: 50 });
-    const existing = assistants.data.find(a =>
-        a.metadata && (a.metadata as any).app === "citizen-quiz" &&
-        a.tool_resources?.file_search?.vector_store_ids?.includes(VECTOR_STORE_ID)
-    );
-
-    if (existing) return existing.id;
-
-    // Create new
-    const created = await openai.beta.assistants.create({
-        name: "Citizen Quiz AI",
-        model: "gpt-4o",
-        instructions: "You are a US Civics Test helper.", // Default instruction, overridden per run
-        tools: [{ type: "file_search" }],
-        tool_resources: {
-            file_search: {
-                vector_store_ids: [VECTOR_STORE_ID]
-            }
-        },
-        metadata: { app: "citizen-quiz" }
-    });
-
-    return created.id;
-}
-
-// Helper: Run Assistant with Override
-async function runWithInstructions(threadId: string, assistantId: string, instructions: string) {
-    const run = await openai.beta.threads.runs.create(threadId, {
-        assistant_id: assistantId,
-        instructions: instructions // OVERRIDE here
-    });
-
-    // Poll
-    let runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: threadId });
-    while (runStatus.status !== 'completed') {
-        if (runStatus.status === 'failed' || runStatus.status === 'cancelled') {
-            throw new Error(`Run failed: ${runStatus.last_error?.message || runStatus.status}`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        runStatus = await openai.beta.threads.runs.retrieve(run.id, { thread_id: threadId });
-    }
-
-    // Get Response
-    const messages = await openai.beta.threads.messages.list(threadId);
-    // Get the most recent message from assistant
-    const lastMsg = messages.data.find(m => m.role === 'assistant' && m.run_id === run.id); // Validating run_id is good practice
-
-    if (lastMsg && lastMsg.content[0].type === 'text') {
-        return lastMsg.content[0].text.value;
-    }
-    return "Error: No response text.";
-}
-
-
 export async function POST(req: NextRequest) {
     try {
         const body = await req.json();
-        const { action, threadId, answer, assistantId: clientAsstId } = body;
+        const { action, previousResponseId, answer } = body;
 
-        // 1. Setup / Get Assistant ID
-        if (action === 'init') {
-            const asstId = await getOrCreateAssistant();
-            return NextResponse.json({ assistantId: asstId });
-        }
-
-        // 2. Start Quiz (Create Thread + First Question)
+        // 1. Start Quiz (Create First Response)
         if (action === 'start') {
-            if (!clientAsstId) return NextResponse.json({ error: "Missing assistantId (call init first)" }, { status: 400 });
-
-            const thread = await openai.beta.threads.create();
-
-            // Run Questioner
-            const question = await runWithInstructions(thread.id, clientAsstId, PROMPT_QUESTIONER);
-
-            return NextResponse.json({ threadId: thread.id, message: question });
-        }
-
-        // 3. Process Answer & Get Feedback (Parser) -> Then Get Next Question
-        if (action === 'answer') {
-            if (!threadId || !clientAsstId) return NextResponse.json({ error: "Missing threadId or assistantId" }, { status: 400 });
-
-            // Add User Answer
-            await openai.beta.threads.messages.create(threadId, {
-                role: "user",
-                content: answer || "(No answer provided)"
+            const response = await openai.responses.create({
+                model: "gpt-4o",
+                tools: [{
+                    type: "file_search",
+                    vector_store_ids: [VECTOR_STORE_ID]
+                }],
+                input: [
+                    { role: "user", content: "Please ask me the first question." }
+                ],
+                instructions: PROMPT_QUESTIONER,
             });
 
-            // Run Parser
-            const feedback = await runWithInstructions(threadId, clientAsstId, PROMPT_PARSER);
+            return NextResponse.json({
+                responseId: response.id,
+                message: response.output_text
+            });
+        }
 
-            // Run Questioner (Immediate follow-up)
-            // Note: We might want these separate to let frontend control pacing, but "Loop" implies continuous.
-            // Let's return both or let frontend call again?
-            // Returning both is faster for UX (less latency if we do it here).
-            // Sending feedback + new question together?
-            // Or separate messages.
+        // 2. Process Answer & Get Feedback (Parser) -> Then Get Next Question
+        if (action === 'answer') {
+            if (!previousResponseId) return NextResponse.json({ error: "Missing previousResponseId" }, { status: 400 });
 
-            // Let's just return feedback first, and let user click "Next"? 
-            // User asked for "Loop". 
-            // Best approach: Return feedback, then frontend automatically requests next question?
-            // OR: We generate next question now and return `{ feedback, nextQuestion }`.
+            // Step A: Submit User Answer and Get Feedback
+            const feedbackResponse = await openai.responses.create({
+                model: "gpt-4o",
+                previous_response_id: previousResponseId,
+                input: [
+                    { role: "user", content: answer || "(No answer provided)" }
+                ],
+                instructions: PROMPT_PARSER,
+                tools: [{
+                    type: "file_search",
+                    vector_store_ids: [VECTOR_STORE_ID]
+                }],
+            });
 
-            const nextQuestion = await runWithInstructions(threadId, clientAsstId, PROMPT_QUESTIONER);
+            const feedback = feedbackResponse.output_text;
 
-            return NextResponse.json({ feedback, nextQuestion });
+            // Step B: Get Next Question (Chain from Feedback)
+            const nextQuestionResponse = await openai.responses.create({
+                model: "gpt-4o",
+                previous_response_id: feedbackResponse.id,
+                instructions: PROMPT_QUESTIONER,
+                input: [
+                    { role: "user", content: "Please ask the next question." }
+                ],
+                tools: [{
+                    type: "file_search",
+                    vector_store_ids: [VECTOR_STORE_ID]
+                }],
+            });
+
+            const nextQuestion = nextQuestionResponse.output_text;
+
+            return NextResponse.json({
+                feedback,
+                nextQuestion,
+                responseId: nextQuestionResponse.id
+            });
         }
 
         return NextResponse.json({ error: "Invalid action" }, { status: 400 });
 
     } catch (error: any) {
-        console.error("Assistant Error:", error);
+        console.error("Assistant/Response Error:", error);
         return NextResponse.json({ error: error.message }, { status: 500 });
     }
 }
