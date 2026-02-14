@@ -8,7 +8,13 @@ const openai = new OpenAI({
 const VECTOR_STORE_ID = "vs_697bfe2441908191a6e27ed1418c43ef";
 
 // Prompts
-const PROMPT_QUESTIONER = `You are a practice questioner for the US naturalization test. Return one question based on the document in plain English. You may alter the wording slightly as a questioner would do on the test. You are to return a question and just the question.`;
+const PREVENT_REPETITION = true;
+
+const BASE_PROMPT = `You are a practice questioner for the US naturalization test. Return one question based on the document in plain English. You may alter the wording slightly as a questioner would do on the test. You are to return a question and just the question.`;
+
+const PROMPT_QUESTIONER = PREVENT_REPETITION
+    ? `${BASE_PROMPT}\n\nReview the conversation history. Do not ask questions that have already been asked. Select a new question from the document.`
+    : BASE_PROMPT;
 
 const PROMPT_PARSER = `Instructions
 You are a practice examiner for the US naturalization test.
