@@ -5,7 +5,11 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
 });
 
-const VECTOR_STORE_ID = "vs_697bfe2441908191a6e27ed1418c43ef";
+const VECTOR_STORE_ID = process.env.OPENAI_VECTOR_STORE_ID!;
+
+if (!VECTOR_STORE_ID) {
+    throw new Error("Missing OPENAI_VECTOR_STORE_ID in environment variables");
+}
 
 // Prompts
 const PREVENT_REPETITION = true;

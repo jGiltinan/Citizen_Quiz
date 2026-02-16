@@ -30,10 +30,22 @@ A conversational AI application designed to help users practice for the US Natur
     ```
 
 3.  Set up environment variables:
-    Create a `.env` file in the root directory and add your OpenAI API key:
+    Create a `.env` file in the root directory and add your OpenAI API key and Vector Store ID:
     ```env
     OPENAI_API_KEY=your_api_key_here
+    OPENAI_VECTOR_STORE_ID=your_vector_store_id_here
     ```
+    
+    > **Note**: This app requires an OpenAI Vector Store containing the US Naturalization Test questions (PDF/Text).
+
+### Creating the Vector Store
+
+To make this app work, you need to provide it with the knowledge base (the test questions).
+
+1.  **Prepare your document**: Download the [100 Civics Questions (PDF)](https://www.uscis.gov/sites/default/files/document/questions-and-answers/100q.pdf) or create a text file with the questions.
+2.  **Go to OpenAI Platform**: Navigate to the [Vector Stores](https://platform.openai.com/storage/vector_stores) dashboard.
+3.  **Create New Store**: Click "+ Create", name it (e.g., "Citizen Quiz"), and upload your document.
+4.  **Get the ID**: Copy the `ID` (starts with `vs_...`) and paste it into your `.env` file as `OPENAI_VECTOR_STORE_ID`.
 
 4.  Run the development server:
     ```bash
