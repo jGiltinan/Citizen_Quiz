@@ -15,7 +15,7 @@ export default function QuizInterface() {
     const [responseId, setResponseId] = useState<string | null>(null);
     const [errorMsg, setErrorMsg] = useState<string>('');
 
-    const { isRecording, startRecording, stopRecording, audioBlob, stream, initializeAudio } = useAudioRecorder();
+    const { isRecording, startRecording, stopRecording, audioBlob, stream, initializeAudio, mimeType } = useAudioRecorder();
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     // Helper to play text as audio
@@ -34,23 +34,54 @@ export default function QuizInterface() {
 
             if (audioRef.current) {
                 audioRef.current.src = url;
+
+                // Safety timeout: If audio doesn't finish (onended) within 15s (or text length), force move on.
+                // This prevents hanging if iOS swallows the event.
+                const timeoutDuration = Math.max(5000, text.length * 100); // approx 100ms per char
+                const safetyTimeout = setTimeout(() => {
+                    console.warn("Audio playback timed out (Safety). Forcing completion.");
+                    if (audioRef.current) {
+                        audioRef.current.pause();
+                        audioRef.current.onended = null;
+                    }
+                    onComplete?.();
+                }, timeoutDuration);
+
                 audioRef.current.onended = () => {
+                    clearTimeout(safetyTimeout);
                     onComplete?.();
                 };
-                audioRef.current.play();
+
+                audioRef.current.play().catch(e => {
+                    console.error("Play failed:", e);
+                    clearTimeout(safetyTimeout);
+                    // If play fails, wait a bit then continue (simulating speech)
+                    setTimeout(() => onComplete?.(), 2000);
+                });
             }
         } catch (e) {
             console.error(e);
             setErrorMsg("Failed to play audio.");
-            setState('error');
+            // Continue even on error
+            setTimeout(() => onComplete?.(), 1000);
+        }
+    };
+
+    const unlockAudio = () => {
+        if (audioRef.current) {
+            audioRef.current.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABBGZWF0YXTuBAAAAAAAAFZMR1QAAAAA'; // Short silent wav
+            audioRef.current.play().catch(e => console.log("Audio unlock failed (might already be unlocked):", e));
         }
     };
 
     const startQuiz = async () => {
+        // 0. Unlock Audio Immediately (Crucial for iOS/Safari)
+        unlockAudio();
+
         setState('initializing');
         setErrorMsg('');
         try {
-            // Check for Secure Context (Required for Mic on non-localhost)
+            // Check for Secure Context (Required for Mic on non-localhost) // REMINDER: User mentioned using ngrok, so this checks HTTPS.
             if (!window.isSecureContext) {
                 throw new Error("Microphone requires HTTPS. Please access via https:// or localhost.");
             }
@@ -83,7 +114,7 @@ export default function QuizInterface() {
             setState('speaking_question');
             await speakText(data.message, () => {
                 setState('listening');
-                startRecording();
+                startRecording(); // Start recording immediately after speaking
             });
 
         } catch (e: any) {
@@ -94,13 +125,18 @@ export default function QuizInterface() {
     };
 
     const submitAnswer = async () => {
-        if (!audioBlob) return;
+        if (!audioBlob || audioBlob.size === 0) {
+            console.warn("Attempted to submit empty audio blob");
+            return;
+        }
 
         setState('processing');
         try {
             // 1. Transcribe
             const formData = new FormData();
-            formData.append('file', audioBlob, 'input.webm');
+            // Determine extension based on mimeType
+            const extension = mimeType.includes('mp4') || mimeType.includes('aac') ? 'm4a' : 'webm';
+            formData.append('file', audioBlob, `input.${extension}`);
 
             const transRes = await fetch('/api/transcribe', {
                 method: 'POST',

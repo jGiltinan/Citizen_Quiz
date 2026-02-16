@@ -7,43 +7,41 @@ export interface AudioRecorderState {
     stopRecording: () => void;
     initializeAudio: () => Promise<void>;
     stream: MediaStream | null;
+    mimeType: string;
 }
 
 export default function useAudioRecorder(): AudioRecorderState {
     const [isRecording, setIsRecording] = useState(false);
     const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
+    const [mimeType, setMimeType] = useState<string>('audio/webm');
 
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const chunksRef = useRef<Blob[]>([]);
-    const streamRef = useRef<MediaStream | null>(null); // Ref to keep track of stream without dependency loops
 
-    // Initialize Audio (Call this on explicit User Interaction)
-    const initializeAudio = useCallback(async () => {
-        try {
-            if (streamRef.current?.active) return; // Already valid
-
-            const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            streamRef.current = mediaStream;
-            setStream(mediaStream);
-        } catch (error) {
-            console.error("Error initializing audio:", error);
-            throw error; // Re-throw to handle in UI
-        }
-    }, []);
+    // We don't need initializeAudio anymore as we get stream on startRecording
+    // but we keep the interface for compatibility if needed, or just remove it from usage.
 
     const startRecording = useCallback(async () => {
         try {
-            let mediaStream = streamRef.current;
+            // Always get a FRESH stream
+            console.log("Acquiring fresh microphone stream...");
+            const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // If no stream exists or it's inactive, try to get it (This might fail if no user gesture, relies on initializeAudio being called first)
-            if (!mediaStream || !mediaStream.active) {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                streamRef.current = mediaStream;
-                setStream(mediaStream);
-            }
+            setStream(mediaStream);
 
-            const mediaRecorder = new MediaRecorder(mediaStream);
+            // Detect supported mime type
+            const types = [
+                'audio/webm;codecs=opus',
+                'audio/webm',
+                'audio/mp4',
+                'audio/aac',
+                'audio/ogg;codecs=opus'
+            ];
+            const selectedType = types.find(type => MediaRecorder.isTypeSupported(type)) || 'audio/webm';
+            setMimeType(selectedType);
+
+            const mediaRecorder = new MediaRecorder(mediaStream, { mimeType: selectedType });
             mediaRecorderRef.current = mediaRecorder;
             chunksRef.current = [];
 
@@ -54,10 +52,12 @@ export default function useAudioRecorder(): AudioRecorderState {
             };
 
             mediaRecorder.onstop = () => {
-                const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+                const blob = new Blob(chunksRef.current, { type: selectedType });
                 setAudioBlob(blob);
 
-                // DO NOT stop tracks here. Keep stream alive for next question.
+                // CRITICAL: Stop the stream tracks to release the mic on iOS
+                mediaStream.getTracks().forEach(track => track.stop());
+                setStream(null);
             };
 
             mediaRecorder.start();
@@ -66,7 +66,8 @@ export default function useAudioRecorder(): AudioRecorderState {
 
         } catch (error) {
             console.error("Error accessing microphone:", error);
-            alert("Could not access microphone during start.");
+            // alert("Could not access microphone."); // Don't alert, let UI handle error
+            throw error;
         }
     }, []);
 
@@ -80,9 +81,17 @@ export default function useAudioRecorder(): AudioRecorderState {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            streamRef.current?.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+            if (stream) {
+                stream.getTracks().forEach((track: MediaStreamTrack) => track.stop());
+            }
         };
+    }, [stream]);
+
+    // Keep initializeAudio as a no-op or just request permissions
+    const initializeAudio = useCallback(async () => {
+        // Just request permission to "warm up" if needed, but startRecording handles it now
+        await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
     }, []);
 
-    return { isRecording, audioBlob, startRecording, stopRecording, initializeAudio, stream };
+    return { isRecording, audioBlob, startRecording, stopRecording, initializeAudio, stream, mimeType };
 }
